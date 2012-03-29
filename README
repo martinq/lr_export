@@ -1,0 +1,72 @@
+====================================================
+= lr_export: Bookshare/Learning Registry submitter =
+====================================================
+
+Pulls book information from Bookshare's repository and
+publishes metadata in NSDL Dublin Core format to a
+Learning Registry node.
+
+lr_export will look at the log file directory to
+determine when the program was last run, and will
+query Bookshare for books in the "Textbooks" and
+"Educational Materials" categories that have been
+added to the repository since that date.
+
+If no log files are found, as is the case when the
+program is first run, lr_export will use a start
+date of 1/1/2002, which predates the creation of the
+Bookshare repository.
+
+The completed list of books is then submitted to the
+specified Learning Registry node.
+
+== Software Prerequisites ==
+
+* Python 2.5 or higher
+* GNU Privacy Guard from http://www.gnupg.org/
+
+== Other Prerequisites ==
+
+* A valid Bookshare individual member account
+  In order to get full information on available formats
+  for copyrighted titles, lr_export must make Bookshare
+  web service requests in user authenticated mode.
+   
+* A Bookshare API key
+  Bookshare web services can only be accessed by
+  registered applications. Get a Bookshare API key
+  at http://developer.bookshare.org/
+
+* A GNU Privacy Guard (GnuPG) keypair
+  Submissions to Learning Registry nodes must be
+  signed using GPG. See the documentation for the
+  LRSignature module at
+  https://github.com/LearningRegistry/LRSignature
+  for more information
+
+== Configuration file ==
+
+The configuration file is separated into 4 sections.
+
+=== Main ===
+
+* log_path: path to where you want lr_export to store log files
+
+=== Bookshare ===
+
+* username: The username of a Bookshare IM account. Typically
+  an email address.
+* password: The password of the Bookshare IM account specified
+  in the username parameter.
+* api_host: Bookshare web service host
+* api_key: Bookshare API key
+
+=== GPG ===
+* path: path to the GPG binary on your system
+* key_passphrase: passphrase for your GPG keypair
+* key_fingerprint: unique fingerprint of your GPG keypair
+* public_key_url: Publicly-accessible URL to your public key
+
+=== Learning Registry ===
+* lr_node: Hostname of the Learning Registry node you wish to
+  publish to
