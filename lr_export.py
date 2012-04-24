@@ -8,7 +8,7 @@ API_DATE = '%m%d%Y'
 SHORT_DATE = "%Y-%m-%d"
 LANGUAGE_CODES = {'English US':'eng', 'Spanish':'spa', 'Bulgarian':'bul', 'Arabic':'ara', 'Afrikaans':'afr', 'Cantonese':'yue', 'Chinese':'chi', 'Czech':'ces', 'Danish':'dan', 'Dutch':'dut', 'French':'fre', 'German':'ger', 'Gujarati':'guj', 'Hebrew':'heb', 'Hindi':'hin', 'Italian':'ita', 'Japanese':'jpn', 'Malayalam':'mal', 'Mandarin':'cmn', 'Marathi':'mar', 'Panjabi':'pan', 'Russian':'rus', 'Swedish':'sve', 'Tamil':'tam', 'Telugu':'tel', 'Turkish':'tur', 'Latin':'lat', 'Bengali':'ben', 'Portuguese':'por', 'Javanese':'jav', 'Korean':'kor', 'Vietnamese':'vie', 'Urdu':'urd', 'English Great Britain':'eng'}
 CATEGORIES = ['Educational Materials', 'Textbooks']
-BOOKSHARE_FORMATS = {"daisy":"ANSI/NISO Z39.86-2005", "brf":"Braille-Ready Format"}
+BOOKSHARE_FORMATS = {"Daisy":{"description":"ANSI/NISO Z39.86-2005", "accessMode":"allTextual"}, "BRF":{"description":"Braille-Ready Format", "accessMode":"brailleOnly"}}
 
 def readConfig():
     config = ConfigParser.SafeConfigParser()
@@ -29,8 +29,10 @@ def getLastRunDate(config):
             logFiles.sort()
             return datetime.datetime.strptime(logFiles[-1], LOG_FILENAME_FORMAT)
     except:
-        # sensible default
-        return datetime.datetime(2002, 01, 01)
+        pass
+    
+    # sensible default
+    return datetime.datetime(2002, 01, 01)
 
 def fetchBooks(config, startDate):
     # prepare all the bits!
@@ -101,11 +103,10 @@ def pushMetadata(config, books):
     for bookId in books.keys():
         documents.append(makeEnvelope(bookId, books[bookId], signer))
         
-    #put "doc" in json, then write it to our output file
+    #JSON-ify results
     doc_json=json.dumps(doc)
     
     numBooks = len(documents)
-    
     if numBooks > 0:
         publishUrl = "http://" + config.get('Learning Registry', 'lr_node') + "/publish"
         publishRequest=urllib2.Request(publishUrl, headers={"Content-type": "application/json; charset=utf-8"})
@@ -120,7 +121,6 @@ def pushMetadata(config, books):
         logging.info("Job completed, Found "+str(numBooks)+" books to upload. Uploaded "+str(successes)+" of "+str(numBooks)+" records successfully.")
     else:
         logging.info("No envelopes created, nothing to upload. Job completed.")
-
 
 def makeEnvelope(bookId, data, signer):
     payload=mapper_dublinCore(bookId, data)
@@ -148,13 +148,9 @@ def makeEnvelope(bookId, data, signer):
     #add info to keys list:
     for cat in data["category"]: envelope["keys"].append(cat)
     for format in data["downloadFormat"]:
-        format=format.lower()
-        if "brf"==format:
-            envelope["keys"].append("BRF")
-            envelope["keys"].append("Braille-Ready Format")
-        if "daisy"==format:
-            envelope["keys"].append("DAISY")
-            envelope["keys"].append("ANSI/NISO Z39.86-2005")
+        if format in BOOKSHARE_FORMATS.keys():
+            envelope["keys"].append(format)
+            envelope["keys"].append(BOOKSHARE_FORMATS[format]["description"])
     signer.sign(envelope)
     return envelope
 
@@ -170,33 +166,10 @@ def mapper_dublinCore(bookId, data):
         schemaVersion="1.02.020"
         xsi:schemaLocation="http://ns.nsdl.org/nsdl_dc_v1.02/ http://ns.nsdl.org/schemas/nsdl_dc/nsdl_dc_v1.02.xsd">
 """
-    s+='    <dc:type xsi:type="dct:DCMIType">Text</dc:type>\n'
-    s+='    <dc:type xsi:type="nsdl_dc:NSDLType">Instructional Material</dc:type>\n'
-    for cat in data["category"]:
-        if cat.lower()=="textbook": s+='<dc:type xsi:type="nsdl_dc:NSDLType">Textbook</dc:type>\n'
     s+='    <dc:identifier xsi:type="dct:URI">http://www.bookshare.org/browse/book/%d</dc:identifier>\n' % (bookId,)
-    if data.has_key('isbn'):
-        s+='    <dct:isFormatOf xsi:type="dct:URI">urn:isbn:%013d</dct:isFormatOf>\n' % (data['isbn'],)
-    s+='    <dct:accessRights xsi:type="nsdl_dc:NSDLAccess">'
-    if data["freelyAvailable"]:
-        s+='Free access'
-    elif not data["freelyAvailable"]:
-        s+='Available by subscription'
-    s+='</dct:accessRights>\n'
     s+='    <dc:title>%s</dc:title>\n' % (escape(data['title']),)
     for author in data["author"]:
         s+='    <dc:creator>%s</dc:creator>\n' % (escape(author),)
-    for category in data["category"]:
-        s+='    <dc:subject>%s</dc:subject>\n' % (escape(category),)
-    for format in data["downloadFormat"]:
-        if format.lower() in BOOKSHARE_FORMATS.keys():
-            s+='    <dc:format>%s</dc:format>\n' % (BOOKSHARE_FORMATS[format.lower()],)
-    for l in data["language"]:
-        try:
-            s+='    <dc:language>%s</dc:language>\n' % (LANGUAGE_CODES[l],)
-        except KeyError:
-            logger.warn("The language '"+l+"' was not found in the list of known languages; this language will not be included in this book's envelope.")
-        continue
     if data.has_key("completeSynopsis"):
         synopsis = data["completeSynopsis"]
     elif data.has_key("briefSynopsis"):
@@ -207,7 +180,34 @@ def mapper_dublinCore(bookId, data):
     s+='    <dc:publisher>%s</dc:publisher>\n' % (escape(data['publisher']),)
     s+='    <dc:date>%s</dc:date>\n' % (data['copyright'],)
     s+='    <dct:dateCopyrighted>%s</dct:dateCopyrighted>\n' % (data['copyright'],)
+    for l in data["language"]:
+        try:
+            s+='    <dc:language>%s</dc:language>\n' % (LANGUAGE_CODES[l],)
+        except KeyError:
+            logger.warn("The language '"+l+"' was not found in the list of known languages; this language will not be included in this book's envelope.")
+        continue
+    for category in data["category"]:
+        s+='    <dc:subject>%s</dc:subject>\n' % (escape(category),)
+    s+='    <dc:type xsi:type="dct:DCMIType">Text</dc:type>\n'
+    s+='    <dc:type xsi:type="nsdl_dc:NSDLType">Instructional Material</dc:type>\n'
+    for cat in data["category"]:
+        if cat.lower()=="textbooks": s+='    <dc:type xsi:type="nsdl_dc:NSDLType">Textbook</dc:type>\n'
+    for format in data["downloadFormat"]:
+        if format in BOOKSHARE_FORMATS.keys():
+            s+='    <dc:format>%s</dc:format>\n' % (format.lower(),)
+            s+='    <dc:format>%s</dc:format>\n' % (BOOKSHARE_FORMATS[format]["description"],)
+    if data.has_key('isbn13'):
+        s+='    <dct:isFormatOf xsi:type="dct:URI">urn:isbn:%s</dct:isFormatOf>\n' % (data['isbn13'],)
+    s+='    <dct:accessRights xsi:type="nsdl_dc:NSDLAccess">'
+    if data["freelyAvailable"]:
+        s+='Free access'
+    elif not data["freelyAvailable"]:
+        s+='Available by subscription'
+    s+='</dct:accessRights>\n'
     s+='    <dc:rights>http://www.bookshare.org/_/aboutUs/legalInformation</dc:rights>\n'
+    for format in data["downloadFormat"]:
+        if format in BOOKSHARE_FORMATS.keys():
+            s+='    <dct:accessibility>%s</dct:accessibility>\n' % (BOOKSHARE_FORMATS[format]["accessMode"],)
     s+='</nsdl_dc:nsdl_dc>'
     return s
 
