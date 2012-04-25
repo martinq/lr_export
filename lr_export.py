@@ -178,8 +178,9 @@ def mapper_dublinCore(bookId, data):
         synopsis=""
     s+='    <dc:description>%s</dc:description>\n' % (escape(synopsis),)
     s+='    <dc:publisher>%s</dc:publisher>\n' % (escape(data['publisher']),)
-    s+='    <dc:date>%s</dc:date>\n' % (data['copyright'],)
-    s+='    <dct:dateCopyrighted>%s</dct:dateCopyrighted>\n' % (data['copyright'],)
+    if data.has_key('copyright') and len(data['copyright']) > 0:
+        s+='    <dc:date>%s</dc:date>\n' % (data['copyright'],)
+        s+='    <dct:dateCopyrighted>%s</dct:dateCopyrighted>\n' % (data['copyright'],)
     for l in data["language"]:
         try:
             s+='    <dc:language>%s</dc:language>\n' % (LANGUAGE_CODES[l],)
