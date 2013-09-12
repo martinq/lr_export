@@ -21,9 +21,14 @@ import re
 import hashlib
 import gnupg
 import types
-import os
+import os, copy
 from LRSignature.errors import UnknownKeyException
 from LRSignature.bencode import bencode
+
+def _cmp_version(version1, version2):
+    def normalize(v):
+        return [int(x) for x in re.sub(r'(\.0+)*$','', v).split(".")]
+    return cmp(normalize(version1), normalize(version2))
 
 class Sign_0_21(object):
     '''
@@ -31,7 +36,7 @@ class Sign_0_21(object):
         see: https://docs.google.com/document/d/191BTary350To_4JokBUFZLFRMOEfGYrl_EHE6QZxUr8/edit
     '''
 
-    def __init__(self, privateKeyID=None, passphrase=None, gnupgHome=os.path.expanduser(os.path.join("~", ".gnupg")), gpgbin="/usr/local/bin/gpg", publicKeyLocations=[]):
+    def __init__(self, privateKeyID=None, passphrase=None, gnupgHome=os.path.expanduser(os.path.join("~", ".gnupg")), gpgbin="/usr/local/bin/gpg", publicKeyLocations=[], sign_everything=True):
         '''
         Constructor
         '''
@@ -41,6 +46,8 @@ class Sign_0_21(object):
         self.gnupgHome = gnupgHome
         self.gpgbin = gpgbin
         self.publicKeyLocations = publicKeyLocations
+        self.min_doc_version = "0.21.0"
+        self.sign_everything = sign_everything
         
         self.gpg = gnupg.GPG(gnupghome=self.gnupgHome, gpgbinary=self.gpgbin)
         
@@ -59,14 +66,20 @@ class Sign_0_21(object):
             
             if privateKeyAvailable == False:
                 raise UnknownKeyException(self.privateKeyID)
-        
+    
+    def _version_check(self, doc):
+        return _cmp_version(doc["doc_version"], self.min_doc_version) >= 0
+
     def _bnormal(self, obj = {}):
             if isinstance(obj, types.NoneType):
                 return "null"
-            elif isinstance(obj, types.FloatType):
-                return str(obj)
+            # Boolean needs to be checked before numeric types as Booleans are also IntType
             elif isinstance(obj, types.BooleanType):
                 return str(obj).lower()
+            elif isinstance(obj, (types.FloatType, types.IntType, types.LongType, types.ComplexType)):
+                print "Dropping number: {0}\n".format(obj)
+                raise TypeError("Numbers not permitted")
+                # return str(obj)
             elif isinstance(obj, types.StringType):
                 return obj
             elif isinstance(obj, types.UnicodeType):
@@ -74,18 +87,24 @@ class Sign_0_21(object):
             elif isinstance(obj, types.ListType):
                 nobj = []
                 for child in obj:
-                    nobj.append(self._bnormal(child))
+                    try:
+                        nobj.append(self._bnormal(child))
+                    except TypeError:
+                        pass
                 return nobj
             elif isinstance(obj, types.DictType):
                 for key in obj.keys():
-                    obj[key] = self._bnormal(obj[key])
+                    try:
+                        obj[key] = self._bnormal(obj[key])
+                    except TypeError:
+                        pass
                 return obj
             else:
                 return obj
     
     def _stripEnvelope(self, envelope={}):
         fields = ["digital_signature", "publishing_node", "update_timestamp", "node_timestamp", "create_timestamp", "doc_ID", "_id", "_rev"]
-        sigObj = envelope.copy()
+        sigObj = copy.deepcopy(envelope)
         for field in fields:
             if sigObj.has_key(field):
                 del sigObj[field]
@@ -146,18 +165,19 @@ class Sign_0_21(object):
         '''
         Hashes and Signs a LR envelope according to the version 2.0 LR Specification
         '''
-        msg = self.get_message(envelope)
-        
-        signPrefs = {
-                     "keyid": self.privateKeyID,
-                     "passphrase": self.passphrase,
-                     "clearsign": True 
-                }
-        
-        result = self.gpg.sign(msg, **signPrefs)
-        
-        
-        envelope["digital_signature"] = self._get_sig_block(result.data)
+        if self._version_check(envelope) or self.sign_everything:
+            msg = self.get_message(envelope)
+            
+            signPrefs = {
+                         "keyid": self.privateKeyID,
+                         "passphrase": self.passphrase,
+                         "clearsign": True 
+                    }
+            
+            result = self.gpg.sign(msg, **signPrefs)
+            
+            
+            envelope["digital_signature"] = self._get_sig_block(result.data)
         
         return envelope
         
