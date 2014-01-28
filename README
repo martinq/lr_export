@@ -3,8 +3,8 @@
 ====================================================
 
 Pulls book information from Bookshare's repository and
-publishes metadata in NSDL Dublin Core format to a
-Learning Registry node.
+publishes metadata in JSON-LD to a Learning Registry
+node.
 
 lr_export will look at the log file directory to
 determine when the program was last run, and will
@@ -36,6 +36,14 @@ specified Learning Registry node.
   Bookshare web services can only be accessed by
   registered applications. Get a Bookshare API key
   at http://developer.bookshare.org/
+
+* Learning Registry authentication credentials
+  Credentials are required to publish to most
+  Learning Registry nodes, and can be configured
+  using the security management tools at the node's
+  /apps/oauth-key-management/ path. Requires a Mozilla
+  Persona login, obtained from https://login.persona.org/
+
 
 * A GNU Privacy Guard (GnuPG) keypair
   Submissions to Learning Registry nodes must be
@@ -70,3 +78,5 @@ The configuration file is separated into 4 sections.
 === Learning Registry ===
 * lr_node: Hostname of the Learning Registry node you wish to
   publish to
+* lr_username: Username for Learning Registry HTTP authentication
+* lr_password: Password for Learning Registry HTTP authentication

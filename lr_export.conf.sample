@@ -1,5 +1,6 @@
 [Main]
 log_path=
+publish_batch_size=
 
 [Bookshare]
 username=
@@ -14,5 +15,6 @@ key_fingerprint=
 public_key_url=
 
 [Learning Registry]
-lr_node=lrtest02.learningregistry.org
-
+lr_node=sandbox.learningregistry.org
+lr_username=
+lr_password=

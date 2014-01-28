@@ -1,4 +1,4 @@
-import ConfigParser, datetime, hashlib, json, logging, LRSignature, os, sys, traceback, urllib, urllib2
+import ConfigParser, datetime, hashlib, json, logging, LRSignature, os, sys, traceback, urllib, urllib2, base64
 from xml.sax.saxutils import escape
 APP_NAME="lr_export"
 LOG_FORMAT = "%(asctime)s %(levelname)s: %(message)s"
@@ -8,7 +8,6 @@ API_DATE = '%m%d%Y'
 SHORT_DATE = "%Y-%m-%d"
 LANGUAGE_CODES = {'English US':'eng', 'Spanish':'spa', 'Bulgarian':'bul', 'Arabic':'ara', 'Afrikaans':'afr', 'Cantonese':'yue', 'Chinese':'chi', 'Czech':'ces', 'Danish':'dan', 'Dutch':'dut', 'French':'fre', 'German':'ger', 'Gujarati':'guj', 'Hebrew':'heb', 'Hindi':'hin', 'Italian':'ita', 'Japanese':'jpn', 'Malayalam':'mal', 'Mandarin':'cmn', 'Marathi':'mar', 'Panjabi':'pan', 'Russian':'rus', 'Swedish':'sve', 'Tamil':'tam', 'Telugu':'tel', 'Turkish':'tur', 'Latin':'lat', 'Bengali':'ben', 'Portuguese':'por', 'Javanese':'jav', 'Korean':'kor', 'Vietnamese':'vie', 'Urdu':'urd', 'English Great Britain':'eng'}
 CATEGORIES = ['Educational Materials', 'Textbooks']
-BOOKSHARE_FORMATS = {"Daisy":{"description":"ANSI/NISO Z39.86-2005", "accessMode":"allTextual"}, "BRF":{"description":"Braille-Ready Format", "accessMode":"brailleOnly"}}
 
 def readConfig():
     config = ConfigParser.SafeConfigParser()
@@ -20,7 +19,6 @@ def initLogging(config):
     logPath = os.path.realpath(config.get('Main', 'log_path'))
     logging.basicConfig(format=LOG_FORMAT, datefmt=LOG_DATE_FORMAT, filename=os.path.join(logPath, logName), filemode='w', level=logging.INFO)
     logging.info("Job started.")
-    sys.excepthook=exceptionHandler
 
 def getLastRunDate(config):
     logFiles = os.listdir(os.path.realpath(config.get('Main', 'log_path')))
@@ -50,44 +48,93 @@ def fetchBooks(config, startDate):
     for category in CATEGORIES:
         page = 1
         while page > 0:
+
+            retry = 0
+            searchResponse = None
+
             url = search_url % (api_host, urllib.quote(category), startDate.strftime(API_DATE), page, safe_username, api_key)
             logUrl=url.split("?")[0] #don't log the api key, so remove everything after the question mark
             logging.info("Retrieving booklist of books since " + startDate.strftime(SHORT_DATE) + " from " + logUrl)
             req=urllib2.Request(url, headers=password_header)
-            conn = urllib2.urlopen(req)
-            res=conn.read()
-            conn.close()
-            searchResponse=json.loads(res) #pythonize json gotten from reading the url response
-            if containsErrors(searchResponse): #no point in continuing, so exit
-                sys.exit(0)
-            root=searchResponse["bookshare"]
-            numPages = int(root["book"]["list"]["numPages"])
-            #for every book in the booklist, request its metadata using its id:
-            for book in root["book"]["list"]["result"]:
-                bookId=book['id']
-                
-                if (result.has_key(bookId) == True):
-                    logging.info("Title \"" + book["title"] + "\" already exists in result set. Skipping metadata fetch.")
-                else:
-                    url=detail_url % (api_host, bookId, safe_username, api_key)
-                    logUrl=url.split("?")[0]
-                    logging.info("Retrieving metadata for \""+book["title"]+"\" with url "+logUrl)
-                    req=urllib2.Request(url, headers=password_header)
+
+            while (searchResponse == None and retry < 3):
+                try:
                     conn = urllib2.urlopen(req)
-                    bookResponse=json.loads(conn.read())
+                    res=conn.read()
                     conn.close()
-                    if containsErrors(bookResponse): continue #the function will log the errors, but we won't let one book stop the whole script, so skip it
-                    data=bookResponse["bookshare"]["book"]["metadata"]
-                    logging.debug("book data:\n"+str(data))
-                    logging.info("Making envelopes from this book's metadata. Categories: "+str(data["category"]))
-                    data["locator"]="http://www.bookshare.org/browse/book/"+str(bookId)
-                    result[bookId]=data
-            logging.info("Finished fetching page %d of %d." % (page, numPages))
-            if page < numPages:
-                page = page + 1
-            else:
-                page = 0
+
+                    #pythonize json gotten from reading the url response
+                    searchResponse=json.loads(res) 
+                    root=searchResponse["bookshare"]
+                    numPages = int(root["book"]["list"]["numPages"])
+
+                    #for every book in the booklist, request its metadata using its id:
+                    for book in root["book"]["list"]["result"]:
+                        bookId=book['id']
+                        
+                        if (result.has_key(bookId) == True):
+                            logging.info("Title \"" + book["title"] + "\" already exists in result set. Skipping metadata fetch.")
+                        else:
+                            url=detail_url % (api_host, bookId, safe_username, api_key)
+                            logUrl=url.split("?")[0]
+                            logging.info("Retrieving metadata for \""+book["title"]+"\" with url "+logUrl)
+                            req=urllib2.Request(url, headers=password_header)
+
+                            # fetch data
+                            tempResult = fetchBookData(req)
+                            # store only if we got one
+                            if tempResult != None:
+                                tempResult["locator"]="http://www.bookshare.org/browse/book/"+str(bookId)
+                                result[bookId] = tempResult
+
+                    logging.info("Finished fetching page %d of %d." % (page, numPages))
+
+                    # set to next page
+                    # if page < numPages:
+                    if page < 1:
+                        page = page + 1
+                    else:
+                        page = 0
+
+                except ValueError:
+                    print "JSON failure"
+                    res = None
+                    retry = retry + 1
+                except KeyError:
+                    print "JSON failure"
+                    res = None
+                    retry = retry + 1
+                except urllib2.HTTPError as httpError:
+                    logging.info("Bookshare API responded with " + str(httpError.code) + " " + httpError.msg + ". Going to retry.")
+                    httpError.close()
+                    retry = retry + 1
     return result
+
+def fetchBookData(req):
+    bookResponse = None
+    retry = 0
+    while bookResponse == None and retry < 3:
+        try:
+            conn = urllib2.urlopen(req)
+            bookResponse=json.loads(conn.read())
+            conn.close()
+            data=bookResponse["bookshare"]["book"]["metadata"]
+            logging.info("book data:\n"+str(data))
+            logging.info("Making envelopes from this book's metadata. Categories: "+str(data["category"]))
+            return data
+        except urllib2.HTTPError as httpError :
+            logging.info("API Server responded with " + str(httpError.code) + " " + httpError.msg + ". Going to retry.")
+            httpError.close()
+            retry = retry + 1
+        except ValueError:
+            print "JSON failure"
+            res = None
+            retry = retry + 1
+        except KeyError:
+            print "JSON failure"
+            res = None
+            retry = retry + 1
+    return None
 
 def getSigner(config):
     fingerprint = config.get('GPG', 'key_fingerprint')
@@ -101,6 +148,7 @@ def pushMetadata(config, books):
     documents = []
     doc = {"documents": documents}
     for bookId in books.keys():
+        logging.info(json.dumps(makeEnvelope(bookId, books[bookId], signer)))
         documents.append(makeEnvelope(bookId, books[bookId], signer))
         
     #JSON-ify results
@@ -109,130 +157,152 @@ def pushMetadata(config, books):
     numBooks = len(documents)
     if numBooks > 0:
         publishUrl = "http://" + config.get('Learning Registry', 'lr_node') + "/publish"
-        publishRequest=urllib2.Request(publishUrl, headers={"Content-type": "application/json; charset=utf-8"})
-        logging.info("Publishing data to LR node at "+publishUrl)
-        res=json.loads(urllib2.urlopen(publishRequest, data=doc_json).read())
-        #now check "res" to make sure everything went okay:
+        username = config.get('Learning Registry', 'lr_username')
+        password = config.get('Learning Registry', 'lr_password')
+        publishRequest=urllib2.Request(publishUrl, headers={"Content-type": "application/json; charset=utf-8", "Authorization" : "Basic " + base64.b64encode(username + ":" + password)})
+
+        retry = 0
         successes=0
-        for i, result in enumerate(res["document_results"]):
-           if containsErrors(res, i):
-                continue
-           successes+=1
+        publishResponse = None
+        while ((publishResponse == None) and retry < 3):
+            logging.info("Publishing data to LR node at " + publishUrl + ", attempt " + str(retry + 1))
+            try:
+                conn = urllib2.urlopen(publishRequest, data=doc_json)
+                publishResponse = json.loads(conn.read())
+                conn.close()
+                if publishResponse["OK"] == False:
+                    logging.info("Publish failed, retrying")
+                    publishResponse = None
+                    retry = retry + 1
+                else:
+                    for result in publishResponse["document_results"]:
+                        if not result["OK"]:
+                            logging.error("Error in envelope: " + str(result["error"]))
+                        else:
+                            logging.info("Published document " + result["doc_ID"])
+                            successes+=1
+            except urllib2.HTTPError as httpError:
+                logging.info("LR Node responded with " + str(httpError.code) + " " + httpError.msg + ". Going to retry.")
+                httpError.close()
+                retry = retry + 1
+            except ValueError:
+                logging.info("Bad JSON response on publish attempt. Retrying.")
+                httpError.close()
+                retry = retry + 1
         logging.info("Job completed, Found "+str(numBooks)+" books to upload. Uploaded "+str(successes)+" of "+str(numBooks)+" records successfully.")
     else:
         logging.info("No envelopes created, nothing to upload. Job completed.")
 
 def makeEnvelope(bookId, data, signer):
-    payload=mapper_dublinCore(bookId, data)
+    payload=mapper_jsonLD(bookId, data)
     #json of envelope to be written, in python form; each book goes into one of these:
     envelope={
         "doc_type": "resource_data", 
-        "doc_version": "0.23.0",  #how do we determine this?
-        "resource_data_type": "metadata",
+        "doc_version": "0.49.0",
         "active": True,
-        "TOS": {"submission_TOS": "http://www.learningregistry.org/tos/cc-by-3-0/v0-5/"},
+        "TOS": {"submission_TOS": "http://www.learningregistry.org/tos/cc0/v0-5/"},
         "identity": {
-            "curator": "",
-            "owner": "",
             "submitter": "Bookshare.org",
             "signer": "Bookshare.org",
             "submitter_type": "agent"
         },
         "resource_locator": data["locator"],
-        "keys": ["Accessible", "AIM"],
+        "keys": ["accessible", "daisy", "bookshare"],
+        "resource_data_type": "metadata",
         "payload_placement": "inline",
-        "payload_schema": ["NSDL DC 1.02.020",],
-        "payload_schema_locator": "http://ns.nsdl.org/schemas/nsdl_dc/nsdl_dc_v1.02.xsd",
+        "payload_schema": ["json", "json-ld", "schema.org", "lrmi"],
         "resource_data": payload
     }
+
     #add info to keys list:
     for cat in data["category"]: envelope["keys"].append(cat)
-    for format in data["downloadFormat"]:
-        if format in BOOKSHARE_FORMATS.keys():
-            envelope["keys"].append(format)
-            envelope["keys"].append(BOOKSHARE_FORMATS[format]["description"])
+
+    # sign envelope
     signer.sign(envelope)
     return envelope
 
-def mapper_dublinCore(bookId, data):
-    #maps Bookshare json data ("data") to DC XML
-    
-    s="""<?xml version="1.0"?>
-<nsdl_dc:nsdl_dc xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-        xmlns:dc="http://purl.org/dc/elements/1.1/"
-        xmlns:dct="http://purl.org/dc/terms/"
-        xmlns:ieee="http://www.ieee.org/xsd/LOMv1p0"
-        xmlns:nsdl_dc="http://ns.nsdl.org/nsdl_dc_v1.02/"
-        schemaVersion="1.02.020"
-        xsi:schemaLocation="http://ns.nsdl.org/nsdl_dc_v1.02/ http://ns.nsdl.org/schemas/nsdl_dc/nsdl_dc_v1.02.xsd">
-"""
-    s+='    <dc:identifier xsi:type="dct:URI">http://www.bookshare.org/browse/book/%d</dc:identifier>\n' % (bookId,)
-    s+='    <dc:title>%s</dc:title>\n' % (escape(data['title']),)
-    for author in data["author"]:
-        s+='    <dc:creator>%s</dc:creator>\n' % (escape(author),)
-    if data.has_key("completeSynopsis"):
-        synopsis = data["completeSynopsis"]
-    elif data.has_key("briefSynopsis"):
-        synopsis=data["briefSynopsis"]
-    else:
-        synopsis=""
-    s+='    <dc:description>%s</dc:description>\n' % (escape(synopsis),)
-    s+='    <dc:publisher>%s</dc:publisher>\n' % (escape(data['publisher']),)
-    if data.has_key('copyright') and len(data['copyright']) > 0:
-        s+='    <dc:date>%s</dc:date>\n' % (data['copyright'],)
-        s+='    <dct:dateCopyrighted>%s</dct:dateCopyrighted>\n' % (data['copyright'],)
-    for l in data["language"]:
-        try:
-            s+='    <dc:language>%s</dc:language>\n' % (LANGUAGE_CODES[l],)
-        except KeyError:
-            logger.warn("The language '"+l+"' was not found in the list of known languages; this language will not be included in this book's envelope.")
-        continue
-    for category in data["category"]:
-        s+='    <dc:subject>%s</dc:subject>\n' % (escape(category),)
-    s+='    <dc:type xsi:type="dct:DCMIType">Text</dc:type>\n'
-    s+='    <dc:type xsi:type="nsdl_dc:NSDLType">Instructional Material</dc:type>\n'
-    for cat in data["category"]:
-        if cat.lower()=="textbooks": s+='    <dc:type xsi:type="nsdl_dc:NSDLType">Textbook</dc:type>\n'
-    for format in data["downloadFormat"]:
-        if format in BOOKSHARE_FORMATS.keys():
-            s+='    <dc:format>%s</dc:format>\n' % (format.lower(),)
-            s+='    <dc:format>%s</dc:format>\n' % (BOOKSHARE_FORMATS[format]["description"],)
-    if data.has_key('isbn13'):
-        s+='    <dct:isFormatOf xsi:type="dct:URI">urn:isbn:%s</dct:isFormatOf>\n' % (data['isbn13'],)
-    s+='    <dct:accessRights xsi:type="nsdl_dc:NSDLAccess">'
-    if data["freelyAvailable"]:
-        s+='Free access'
-    elif not data["freelyAvailable"]:
-        s+='Available by subscription'
-    s+='</dct:accessRights>\n'
-    s+='    <dc:rights>http://www.bookshare.org/_/aboutUs/legalInformation</dc:rights>\n'
-    for format in data["downloadFormat"]:
-        if format in BOOKSHARE_FORMATS.keys():
-            s+='    <dct:accessibility>%s</dct:accessibility>\n' % (BOOKSHARE_FORMATS[format]["accessMode"],)
-    s+='</nsdl_dc:nsdl_dc>'
-    return s
+def mapper_jsonLD(bookId, data):
+    #maps Bookshare json data ("data") to JSON-LD
 
-def containsErrors(res, mode="bs", i=0):
-    #mode=="bs": check for Bookshare errors; else check for LR errors
-    #"i" is for LR only since each result is an element of a list and may be ok or not
-    if mode=="bs".lower():
-        root=res["bookshare"]
-        if "statusCode" in root.keys():
-            logging.error("Error retrieving latest booklist: "+root["messages"][0]+" (code "+str(root["statusCode"])+")")
-            return True
-    else: #LR errors
-        result=res["document_results"][i]
-        if not result["OK"]:
-            logging.error("Error in envelope: "+str(result["error"]))
-            return True
-    return False #no errors found
+    payload = {
+        "@context": {
+            "@vocab": "http://schema.org/",
+            "lrmi": "http://lrmi.net/the-specification#",
+            "useRightsUrl": {
+                "@id": "lrmi:useRightsUrl",
+                "@type": "@id"
+            }
+        },
+        "@type" : "http://schema.org/Book",
+        "@id": data["locator"],
+        "url": data["locator"],
+        "name": data["title"],
+        "bookFormat": "EBook/DAISY3",
+        "useRightsUrl": "http://www.bookshare.org/_/aboutUs/legalInformation",
+        "provider": {
+            "@type": "http://schema.org/Organization",
+            "name": "Bookshare.org"
+        },
+        "interactivityType": "expositive",
+        "learningResourceType": "textbook",
+        "audience": {
+            "@type": "http://schema.org/EducationalAudience",
+            "educationalRole": "student"
+        },
+        "accessibilityFeature": [
+            "displayTransformability/font-size",
+            "displayTransformability/font-family",
+            "displayTransformability/color",
+            "displayTransformability/background-color",
+            "bookmarks",
+            "readingOrder",
+            "structuralNavigation"
+        ],
+        "accessibilityHazard": [
+            "noFlashingHazard",
+            "noMotionSimulationHazard",
+            "noSoundHazard"
+        ],
+        "accessibilityControl": [
+            "fullKeyboardControl",
+            "fullMouseControl"
+        ]
+    }
 
-def exceptionHandler(type, value, tb):
-    #used to override default exceptions so we can log them, even if we don't catch them
-    exc=traceback.format_exception(type, value, tb)
-    err="Uncaught Exception:\n"
-    err+="".join(line for line in exc)
-    logging.error(err)
+    # authors
+    if data.has_key("author") and len(data["author"]) > 0:
+        payload["author"] = data["author"]
+
+    if data.has_key("category") and len(data["category"]) > 0:
+        payload["keywords"] = data["category"]
+
+    if data.has_key("language") and len(data["language"]) > 0:
+        languages = []
+        for lang in data["language"]:
+            languages.append(LANGUAGE_CODES[lang])
+        payload["inLanguage"] = languages
+
+    if data.has_key("completeSynopsis") and len(data["completeSynopsis"].strip()) > 0:
+        payload["description"] = data["completeSynopsis"].strip()
+    elif data.has_key("briefSynopsis") and len(data["briefSynopsis"].strip()) > 0:
+        payload["description"] = data["briefSynopsis"].strip()
+
+    if data.has_key("isbn13"):
+        payload["isbn"] = data["isbn13"]
+
+    if data.has_key("publisher"):
+        payload["publisher"] = {
+            "@type": "http://schema.org/Organization",
+            "name": data["publisher"]
+        }
+
+    if data.has_key("publish_date"):
+        payload["datePublished"] = data["datePublished"].strftime(SHORT_DATE)
+        
+    if data.has_key("copyright"):
+        payload["copyrightYear"] = data["copyright"]
+
+    return payload
 
 if __name__ == "__main__":
     config = readConfig()
@@ -241,6 +311,18 @@ if __name__ == "__main__":
     print("Searching for new books since %s..." % (lastRunDate.strftime(LOG_DATE_FORMAT),))
     books = fetchBooks(config, lastRunDate)
     print("Found data for %d books" % (len(books),))
-    pushMetadata(config, books)
+
+    # do in batches
+    batchSize = int(config.get('Main', 'publish_batch_size'))
+    bookBatch = {}
+    for bookId in books.keys():
+        bookBatch[bookId] = books[bookId]
+        if (len(bookBatch) == batchSize):
+            pushMetadata(config, bookBatch)
+            bookBatch = {}
+    
+    # push any leftovers
+    pushMetadata(config, bookBatch)
+
     print("Done.")
 
