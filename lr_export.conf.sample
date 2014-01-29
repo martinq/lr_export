@@ -1,6 +1,6 @@
 [Main]
 log_path=
-publish_batch_size=
+publish_batch_size=50
 
 [Bookshare]
 username=

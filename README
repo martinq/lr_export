@@ -59,6 +59,8 @@ The configuration file is separated into 4 sections.
 === Main ===
 
 * log_path: path to where you want lr_export to store log files
+* publish_batch_size: number of documents to pack in a single
+  submission batch
 
 === Bookshare ===
 
