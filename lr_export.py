@@ -90,8 +90,7 @@ def fetchBooks(config, startDate):
                     logging.info("Finished fetching page %d of %d." % (page, numPages))
 
                     # set to next page
-                    # if page < numPages:
-                    if page < 1:
+                    if page < numPages:
                         page = page + 1
                     else:
                         page = 0
@@ -320,7 +319,7 @@ if __name__ == "__main__":
         if (len(bookBatch) == batchSize):
             pushMetadata(config, bookBatch)
             bookBatch = {}
-    
+
     # push any leftovers
     pushMetadata(config, bookBatch)
 
