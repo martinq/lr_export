@@ -87,7 +87,8 @@ def fetchBooks(config, startDate):
                                 tempResult["locator"]="http://www.bookshare.org/browse/book/"+str(bookId)
                                 result[bookId] = tempResult
 
-                    logging.info("Finished fetching page %d of %d." % (page, numPages))
+                    print("Processed page %d of %d for category %s." % (page, numPages, category))
+                    logging.info("Finished fetching page %d of %d for category %s." % (page, numPages, category))
 
                     # set to next page
                     if page < numPages:
@@ -118,8 +119,8 @@ def fetchBookData(req):
             bookResponse=json.loads(conn.read())
             conn.close()
             data=bookResponse["bookshare"]["book"]["metadata"]
-            logging.info("book data:\n"+str(data))
-            logging.info("Making envelopes from this book's metadata. Categories: "+str(data["category"]))
+            logging.debug("book data:\n"+str(data))
+            logging.debug("Making envelopes from this book's metadata. Categories: "+str(data["category"]))
             return data
         except urllib2.HTTPError as httpError :
             logging.info("API Server responded with " + str(httpError.code) + " " + httpError.msg + ". Going to retry.")
@@ -147,7 +148,7 @@ def pushMetadata(config, books):
     documents = []
     doc = {"documents": documents}
     for bookId in books.keys():
-        logging.info(json.dumps(makeEnvelope(bookId, books[bookId], signer)))
+        logging.debug(json.dumps(makeEnvelope(bookId, books[bookId], signer)))
         documents.append(makeEnvelope(bookId, books[bookId], signer))
         
     #JSON-ify results
